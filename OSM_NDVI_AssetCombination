@@ -1,0 +1,74 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var Infrastructure = ee.Image("projects/ee-quirinball22/assets/Infrastructure10m"),
+    Water = ee.Image("projects/ee-quirinball22/assets/Water"),
+    AOI = ee.FeatureCollection("projects/ee-quirinball22/assets/Tangsel-KabTang");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Add OSM buildings Layer with over 75 percent confidence 
+// Visualization of GOOGLE/Research/open-buildings/v3/polygons - extract with AOI 
+Map.centerObject(AOI, 12);
+
+var t = ee.FeatureCollection('GOOGLE/Research/open-buildings/v3/polygons');
+var t_gte_075 = t.filter('confidence >= 0.75');
+
+var Building = t_gte_075
+  .reduceToImage({
+    properties: ['confidence'],
+    reducer: ee.Reducer.first()
+});
+//Map.addLayer(t_gte_075, {color: 'yellow'}, 'Buildings confidence >= 0.75');
+
+// Calculate NDVI from Sentinel 2
+// NDVI Mosaic
+
+var S2_col = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+              .filterBounds(AOI)
+              .filterDate('2021-01-01','2023-12-31')
+              .filterMetadata('CLOUD_COVERAGE_ASSESSMENT', 'less_than', 10)
+              .sort('CLOUD_COVERAGE_ASSESSMENT',false); 
+              
+
+var S2M = S2_col.median()
+.clip(AOI);
+
+// Compute the Normalized Difference Vegetation Index (NDVI).
+var nirM = S2M.select('B8');
+var redM = S2M.select('B4');
+var ndviM = nirM.subtract(redM).divide(nirM.add(redM)).rename('NDVI');
+
+// Display the result.
+var vegPalette = ['red', 'white', 'green'];
+
+var ndvi2023 = {min: -1, max: 1, palette: vegPalette};
+//Map.addLayer(ndviM, ndvi2023, 'NDVI 23 Cloud Mosaic');
+
+//Combine NDVI with OSM Layers
+
+// Remove Buildings, Infrastructure and Water from NDVI
+
+var NDVINoBuildingNoInfrastructureNoWater = ndviM.updateMask(Building.unmask().not())
+                                          .updateMask(Infrastructure.unmask().not())
+                                          .updateMask(Water.unmask().not());
+  
+Map.addLayer(NDVINoBuildingNoInfrastructureNoWater, {
+  min: -1,
+  max: 1,
+  palette: vegPalette
+}, 'NDVI without Building, Infrastructure and Water')                                          
+  
+Export.image.toAsset({
+  image: NDVINoBuildingNoInfrastructureNoWater.float(),
+  description: 'NDVI_OSM_TangselKabTang_withoutWater',
+  assetId: 'users/ee-quirinball22',
+  scale: 10,
+  region: AOI,
+  maxPixels: 1e9
+}); 
+
+Export.image.toDrive({
+image: NDVINoBuildingNoInfrastructureNoWater.float(),
+description: 'NDVI_OSM_withoutWater',
+folder: 'Java',
+scale: 10,
+region: AOI,
+maxPixels: 1e9
+});

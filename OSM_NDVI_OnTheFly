@@ -1,0 +1,192 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var Railway_Line = ee.FeatureCollection("projects/ee-quirinball22/assets/OSM_Railways_Java"),
+    Roads_Line = ee.FeatureCollection("projects/ee-quirinball22/assets/OSM_Roads_Java"),
+    Water = ee.FeatureCollection("projects/ee-quirinball22/assets/OSM_Water_Java"),
+    Waterways = ee.FeatureCollection("projects/ee-quirinball22/assets/OSM_Waterways_Java"),
+    AOI = ee.FeatureCollection("projects/ee-quirinball22/assets/Tangsel-KabTang");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+//Determine the area of intrest (AOI) and add to map if required 
+//Map.addLayer(AOI, {color: 'grey'}, 'Tangsel-KabTang');
+
+//Set map center to AOI
+Map.centerObject(AOI, 7);
+
+//Import OSM infrastructure data 
+//Classify Roads
+//Buffer Roads based on their class
+var L1_Roads = Roads_Line.filter(ee.Filter.inList('fclass',
+                                ee.List(['motorway','motorway_link', 'trunk', 'trunk_link'])))
+                                .filterBounds(AOI);
+var L1_Buffer = L1_Roads.map(function(f) {
+  return f.buffer(10);
+});
+
+var L2_Roads = Roads_Line.filter(ee.Filter.inList('fclass',                                
+                               ee.List(['primary', 'primary_link'])))
+                               .filterBounds(AOI);
+var L2_Buffer = L2_Roads.map(function(f) {
+  return f.buffer(5);
+});
+
+var L3_Roads = Roads_Line.filter(ee.Filter.inList('fclass',
+                               ee.List(['secondary', 'secondary_link'])))
+                               .filterBounds(AOI);
+var L3_Buffer = L3_Roads.map(function(f) {
+  return f.buffer(5);
+});
+
+var L4_Roads = Roads_Line.filter(ee.Filter.inList('fclass',
+                                ee.List(['tertiary',  'tertiary_link', 'busway'])))
+                                .filterBounds(AOI);
+var L4_Buffer = L4_Roads.map(function(f) {
+  return f.buffer(3);
+});
+
+var L5_Roads = Roads_Line.filter(ee.Filter.inList('fclass',
+                                ee.List(['unclassified'])))
+                                .filterBounds(AOI);
+var L5_Buffer = L5_Roads.map(function(f) {
+  return f.buffer(1);
+});
+
+var L6_Roads = Roads_Line.filter(ee.Filter.inList('fclass',
+                                ee.List(['residential','living_street','service'])))
+                                .filterBounds(AOI);
+var L6_Buffer = L6_Roads.map(function(f) {
+  return f.buffer(2);
+});
+
+//Merge to Road Layer
+var Roads = L1_Buffer.merge(L2_Buffer)
+                     .merge(L3_Buffer)
+                     .merge(L4_Buffer)
+                     .merge(L5_Buffer)
+                     .merge(L6_Buffer);
+//Map.addLayer(Roads, {color: 'black'}, 'Roads');
+
+//Add and buffer Railways
+var Railway = Railway_Line.map(function(f) {
+  return f.buffer(5);
+})
+.filterBounds(AOI);
+
+//Merge Roads and Railway Layer to Infrastructure Layer
+var Infra = Roads.merge(Railway);
+    
+// Make an image out of the Infrastructure Layer; Raster transformation
+var Infra = Infra.map(function(feat){
+   return feat.set('mask', 1);
+});
+var Infrastructure = Infra.reduceToImage({
+    properties: ['mask'],
+    reducer: ee.Reducer.first()
+});
+
+//Add water Layer
+//Buffer classified Waterways
+//Map.addLayer(Waterways, {color: 'darkblue'}, 'Waterways');
+var Streams = Waterways.filter(ee.Filter.inList('fclass',
+                                ee.List(['stream'])))
+                                .filterBounds(AOI);
+var Streams_Poly = Streams.map(function(f) {
+  return f.buffer(10);
+});
+
+var Rivers = Waterways.filter(ee.Filter.inList('fclass',
+                                ee.List(['river'])))
+                                .filterBounds(AOI);                               
+var Rivers_Poly = Rivers.map(function(f) {
+  return f.buffer(5);
+});
+
+var Canals = Waterways.filter(ee.Filter.inList('fclass',
+                                ee.List(['canal'])))
+                                .filterBounds(AOI);
+var Canals_Poly = Canals.map(function(f) {
+  return f.buffer(2);
+});
+
+//Merge to Waterways Layer
+var Waterways_Poly = Streams_Poly.merge(Rivers_Poly)
+                                 .merge(Canals_Poly);
+//                                 .merge(Drains_Poly);
+
+var WaterOSM = Water.filterBounds(AOI)
+var Water_Poly = Waterways_Poly.merge(WaterOSM);
+//Map.addLayer(Water_Poly, {color: 'blue'}, 'Water_Vector');
+
+// Make an image out of the Water Layer.
+
+var Water_Poly = Water_Poly.map(function(feat){
+   return feat.set('mask', 1);
+});
+var Waterbody = Water_Poly.reduceToImage({
+    properties: ['mask'],
+    reducer: ee.Reducer.first()
+});
+
+
+// Load Buildings from OSM 
+
+var t = ee.FeatureCollection('GOOGLE/Research/open-buildings/v3/polygons');
+var t_gte_075 = t.filter('confidence >= 0.75');
+
+var Building = t_gte_075
+  .reduceToImage({
+    properties: ['confidence'],
+    reducer: ee.Reducer.first()
+});
+// Calculate NDVI from Sentinel 2
+
+// NDVI Cloud Mosaic
+
+var S2_col = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+              .filterBounds(AOI)
+              .filterDate('2021-01-01','2023-12-31')
+              .filterMetadata('CLOUD_COVERAGE_ASSESSMENT', 'less_than', 10)
+              .sort('CLOUD_COVERAGE_ASSESSMENT',false); 
+              
+
+var S2M = S2_col.median()
+.clip(AOI);
+
+// Compute the Normalized Difference Vegetation Index (NDVI).
+var nirM = S2M.select('B8');
+var redM = S2M.select('B4');
+var ndviM = nirM.subtract(redM).divide(nirM.add(redM)).rename('NDVI');
+
+//Combine NDVI with OSM Layers
+
+// Remove Buildings, Infrastructure and Water from NDVI
+
+var NDVINoBuildingNoInfrastructureNoWater = ndviM.updateMask(Building.unmask().not())
+                                          .updateMask(Infrastructure.unmask().not())
+                                          .updateMask(Waterbody.unmask().not());
+
+//Display the result
+
+var vegPalette = ['red', 'white', 'green']
+  
+Map.addLayer(NDVINoBuildingNoInfrastructureNoWater, {
+  min: -1,
+  max: 1,
+  palette: vegPalette
+}, 'NDVI without Building, Infrastructure and Water')                                          
+  
+Export.image.toAsset({
+  image: NDVINoBuildingNoInfrastructureNoWater.float(),
+  description: 'NDVI_OSM_TangselKabTang_withoutWater',
+  assetId: 'users/ee-quirinball22',
+  scale: 10,
+  region: AOI,
+  maxPixels: 1e9
+}); 
+
+Export.image.toDrive({
+image: NDVINoBuildingNoInfrastructureNoWater.float(),
+description: 'NDVI_OSM_withoutWater',
+folder: 'Java',
+scale: 10,
+region: AOI,
+maxPixels: 1e9
+});
